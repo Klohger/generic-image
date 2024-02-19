@@ -1,17 +1,19 @@
 #![feature(new_uninit)]
-use core::{
-    marker::PhantomData,
-    mem::size_of,
-    ops::{Index, IndexMut, Range},
-};
 /// IMPROVEMENTS:
 /// proper error handling
 /// ability to resize
 /// png feature gate
 /// std feature gate
-///
+/// new_uninit feature gate
+/// mutable iterator
+use core::{
+    marker::PhantomData,
+    mem::size_of,
+    ops::{Index, IndexMut, Range},
+};
 use std::{
-    io::{Read, Seek, Write},
+    fmt::Debug,
+    io::{self, Read, Seek, Write},
     rc::Rc,
     sync::Arc,
 };
@@ -25,6 +27,31 @@ where
     stride: usize,
     source: Source,
     _p: PhantomData<Pixel>,
+}
+
+impl<Source, Pixel> Debug for Image<Source, Pixel>
+where
+    Source: AsRef<[Pixel]> + Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Image")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("stride", &self.stride)
+            .field("source", &self.source)
+            .finish()
+    }
+}
+
+impl<LSource, RSource, Pixel> PartialEq<Image<RSource, Pixel>> for Image<LSource, Pixel>
+where
+    Pixel: PartialEq,
+    LSource: AsRef<[Pixel]>,
+    RSource: AsRef<[Pixel]>,
+{
+    fn eq(&self, other: &Image<RSource, Pixel>) -> bool {
+        self.iter().eq(other.iter())
+    }
 }
 
 impl<Source, Pixel> AsMut<Self> for Image<Source, Pixel>
@@ -45,7 +72,7 @@ where
     }
 }
 impl<Pixel> Image<Box<[Pixel]>, Pixel> {
-    pub fn empty_box(width: usize, height: usize) -> Self {
+    pub unsafe fn zeroed(width: usize, height: usize) -> Self {
         Image {
             width,
             height,
@@ -65,7 +92,7 @@ impl<Pixel> Image<Box<[Pixel]>, Pixel> {
     }
 }
 impl<Pixel> Image<Rc<[Pixel]>, Pixel> {
-    pub fn empty_rc(width: usize, height: usize) -> Self {
+    pub unsafe fn zeroed_rc(width: usize, height: usize) -> Self {
         Image {
             width,
             height,
@@ -85,7 +112,7 @@ impl<Pixel> Image<Rc<[Pixel]>, Pixel> {
     }
 }
 impl<Pixel> Image<Arc<[Pixel]>, Pixel> {
-    pub fn empty_arc(width: usize, height: usize) -> Self {
+    pub unsafe fn zeroed_arc(width: usize, height: usize) -> Self {
         Image {
             width,
             height,
@@ -105,7 +132,7 @@ impl<Pixel> Image<Arc<[Pixel]>, Pixel> {
     }
 }
 impl<Pixel> Image<Vec<Pixel>, Pixel> {
-    pub fn empty_vec(width: usize, height: usize) -> Self {
+    pub unsafe fn zeroed_vec(width: usize, height: usize) -> Self {
         Image {
             width,
             height,
@@ -146,7 +173,31 @@ where
         self.source.as_mut().index_mut(index)
     }
 }
-
+impl<Pixel, Source> Image<Source, Pixel>
+where
+    Source: AsRef<[Pixel]>,
+    Pixel: Copy,
+{
+    pub fn reallocated(&self) -> Image<Box<[Pixel]>, Pixel> {
+        let mut source = Box::new_uninit_slice(self.width * self.height);
+        for (i, old_i) in (0..self.width).map(|i| (i * self.height, i * self.stride)) {
+            unsafe {
+                std::ptr::copy(
+                    (&self.source.as_ref()[old_i]) as *const _,
+                    source[i].as_mut_ptr(),
+                    self.width,
+                )
+            };
+        }
+        Image {
+            width: self.width,
+            height: self.height,
+            stride: self.width,
+            source: unsafe { source.assume_init() },
+            _p: PhantomData,
+        }
+    }
+}
 impl<Pixel, Source> Image<Source, Pixel>
 where
     Source: AsRef<[Pixel]>,
@@ -228,7 +279,13 @@ where
     pub fn into_source(self) -> Source {
         self.source
     }
+
+    pub fn iter<'a>(&'a self) -> std::iter::Map<Range<usize>, impl Fn(usize) -> &'a [Pixel]> {
+        let map = |i| &self.source.as_ref()[(i * self.stride)..((i * self.stride) + self.width)];
+        (0..self.height).map(map)
+    }
 }
+
 impl<Pixel, Source> Image<Source, Pixel>
 where
     Source: AsMut<[Pixel]> + AsRef<[Pixel]>,
@@ -287,13 +344,21 @@ where
     Source: AsRef<[Pixel]>,
 {
     fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
-        let image = self.image.as_ref().width();
+        let image = self.image.as_ref();
         let new_index = match pos {
             std::io::SeekFrom::Start(i) => i,
-            std::io::SeekFrom::End(_) => self.image.as_ref().width(),
-            std::io::SeekFrom::Current(_) => todo!(),
+            std::io::SeekFrom::End(offset) => u64::try_from(image.width() * image.height())
+                .map_err(|err| io::Error::other(err))?
+                .checked_add_signed(offset)
+                .unwrap(),
+            std::io::SeekFrom::Current(offset) => u64::try_from(self.index)
+                .map_err(|error| io::Error::other(error))?
+                .checked_add_signed(offset)
+                .unwrap(),
         };
-        new_index
+
+        self.index = usize::try_from(new_index).map_err(|error| io::Error::other(error))?;
+        Ok(new_index)
     }
 }
 
