@@ -7,16 +7,61 @@
 /// new_uninit feature gate
 /// mutable iterator
 use core::{
+    cmp,
+    fmt::Debug,
     marker::PhantomData,
     mem::size_of,
     ops::{Index, IndexMut, Range},
 };
 use std::{
-    fmt::Debug,
     io::{self, Read, Seek, Write},
     rc::Rc,
     sync::Arc,
 };
+
+pub trait ImageIndex<Source, Pixel>
+where
+    Source: AsRef<[Pixel]>,
+{
+    fn index(self, image: &Image<Source, Pixel>) -> usize;
+    fn pos(&self, image: &Image<Source, Pixel>) -> [usize; 2];
+}
+
+impl<Source, Pixel> ImageIndex<Source, Pixel> for usize
+where
+    Source: AsRef<[Pixel]>,
+{
+    fn index(self, image: &Image<Source, Pixel>) -> usize {
+        self
+    }
+
+    fn pos(&self, image: &Image<Source, Pixel>) -> [usize; 2] {
+        image.index_to_pos(*self)
+    }
+}
+impl<Source, Pixel> ImageIndex<Source, Pixel> for (usize, usize)
+where
+    Source: AsRef<[Pixel]>,
+{
+    fn index(self, image: &Image<Source, Pixel>) -> usize {
+        image.pos_to_index(self.0, self.1)
+    }
+
+    fn pos(&self, image: &Image<Source, Pixel>) -> [usize; 2] {
+        (*self).into()
+    }
+}
+impl<Source, Pixel> ImageIndex<Source, Pixel> for [usize; 2]
+where
+    Source: AsRef<[Pixel]>,
+{
+    fn index(self, image: &Image<Source, Pixel>) -> usize {
+        image.pos_to_index(self[0], self[1])
+    }
+    fn pos(&self, image: &Image<Source, Pixel>) -> [usize; 2] {
+        *self
+    }
+}
 
 pub struct Image<Source, Pixel>
 where
@@ -153,27 +198,27 @@ impl<Pixel> Image<Vec<Pixel>, Pixel> {
         }
     }
 }
-impl<Pixel, Source> Index<(usize, usize)> for Image<Source, Pixel>
+impl<Source, Pixel, I: ImageIndex<Source, Pixel>> Index<I> for Image<Source, Pixel>
 where
     Source: AsRef<[Pixel]>,
 {
     type Output = Pixel;
 
-    fn index(&self, index: (usize, usize)) -> &Pixel {
-        self.source.as_ref().index(self.calc_index(index))
+    fn index(&self, index: I) -> &Pixel {
+        self.source.as_ref().index(index.index(self))
     }
 }
-impl<Pixel, Source> IndexMut<(usize, usize)> for Image<Source, Pixel>
+impl<Source, Pixel, I: ImageIndex<Source, Pixel>> IndexMut<I> for Image<Source, Pixel>
 where
     Source: AsMut<[Pixel]> + AsRef<[Pixel]>,
 {
-    fn index_mut(&mut self, index: (usize, usize)) -> &mut Pixel {
-        let index = self.calc_index(index);
+    fn index_mut(&mut self, index: I) -> &mut Pixel {
+        let index = index.index(self);
 
         self.source.as_mut().index_mut(index)
     }
 }
-impl<Pixel, Source> Image<Source, Pixel>
+impl<Source, Pixel> Image<Source, Pixel>
 where
     Source: AsRef<[Pixel]>,
     Pixel: Copy,
@@ -198,12 +243,21 @@ where
         }
     }
 }
-impl<Pixel, Source> Image<Source, Pixel>
+impl<Source, Pixel> Image<Source, Pixel>
 where
     Source: AsRef<[Pixel]>,
 {
-    const fn calc_index(&self, pos: (usize, usize)) -> usize {
-        (pos.0 % self.width) + (pos.1 * self.stride)
+    pub const fn pos_to_index(&self, x: usize, y: usize) -> usize {
+        if !(x < self.width) {
+            panic!("x coordinate was outside of image");
+        }
+        if !(y < self.height) {
+            panic!("y coordinate was outside of image");
+        }
+        (x) + (y * self.stride)
+    }
+    pub const fn index_to_pos(&self, i: usize) -> [usize; 2] {
+        [i % self.width, i / self.width]
     }
 
     pub fn from_source(width: usize, height: usize, source: Source) -> Option<Self> {
@@ -237,25 +291,17 @@ where
             })
         }
     }
-    pub fn region(&self, range: Range<(usize, usize)>) -> Option<Image<&[Pixel], Pixel>> {
-        if range.start.0 < self.width
-            && range.start.1 < self.width
-            && range.end.0 < self.width
-            && range.end.1 < self.height
-            && range.start.0 <= range.end.0
-            && range.start.1 <= range.end.1
-        {
-            let start_i = self.calc_index(range.start);
-            let end_i = self.calc_index(range.end);
-            Some(Image {
-                width: range.end.0 - range.start.0,
-                height: range.end.1 - range.start.1,
-                stride: self.stride,
-                source: &self.source.as_ref().index(start_i..end_i),
-                _p: PhantomData,
-            })
-        } else {
-            None
+    pub fn region(&self, range: Range<impl ImageIndex<Source, Pixel>>) -> Image<&[Pixel], Pixel> {
+        let start_pos = range.start.pos(self);
+        let end_pos = range.end.pos(self);
+        let start_i = range.start.index(self);
+        let end_i = range.end.index(self);
+        Image {
+            width: end_pos[0] - start_pos[0],
+            height: end_pos[0] - start_pos[1],
+            stride: self.stride,
+            source: &self.source.as_ref().index(start_i..end_i),
+            _p: PhantomData,
         }
     }
     pub const fn cursor(&self) -> ImageCursor<Source, Pixel, &Self> {
@@ -286,7 +332,7 @@ where
     }
 }
 
-impl<Pixel, Source> Image<Source, Pixel>
+impl<Source, Pixel> Image<Source, Pixel>
 where
     Source: AsMut<[Pixel]> + AsRef<[Pixel]>,
 {
@@ -321,7 +367,7 @@ where
         ImageCursor::new(self)
     }
 }
-impl<Pixel, Source> Image<Source, Pixel>
+impl<Source, Pixel> Image<Source, Pixel>
 where
     Pixel: Clone,
     Source: AsMut<[Pixel]> + AsRef<[Pixel]>,
@@ -343,15 +389,15 @@ impl<Source, Pixel, I: AsRef<Image<Source, Pixel>>> Seek for ImageCursor<Source,
 where
     Source: AsRef<[Pixel]>,
 {
-    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+    fn seek(&mut self, pos: io::SeekFrom) -> io::Result<u64> {
         let image = self.image.as_ref();
         let new_index = match pos {
-            std::io::SeekFrom::Start(i) => i,
-            std::io::SeekFrom::End(offset) => u64::try_from(image.width() * image.height())
+            io::SeekFrom::Start(i) => i,
+            io::SeekFrom::End(offset) => u64::try_from(image.width() * image.height())
                 .map_err(|err| io::Error::other(err))?
                 .checked_add_signed(offset)
                 .unwrap(),
-            std::io::SeekFrom::Current(offset) => u64::try_from(self.index)
+            io::SeekFrom::Current(offset) => u64::try_from(self.index)
                 .map_err(|error| io::Error::other(error))?
                 .checked_add_signed(offset)
                 .unwrap(),
@@ -367,7 +413,7 @@ impl<Source, Pixel, I: AsRef<Image<Source, Pixel>> + AsMut<Image<Source, Pixel>>
 where
     Source: AsRef<[Pixel]> + AsMut<[Pixel]>,
 {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let image = self.image.as_mut();
         if self.index < image.stride * image.height * size_of::<Pixel>() {
             let current_row_index =
@@ -383,12 +429,12 @@ where
             };
 
             match buf.len().cmp(&rest_of_row.len()) {
-                std::cmp::Ordering::Less => {
+                cmp::Ordering::Less => {
                     self.index += buf.len();
                     rest_of_row[..buf.len()].copy_from_slice(buf);
                     Ok(buf.len())
                 }
-                std::cmp::Ordering::Equal | std::cmp::Ordering::Greater => {
+                cmp::Ordering::Equal | cmp::Ordering::Greater => {
                     rest_of_row.copy_from_slice(&buf[..rest_of_row.len()]);
                     self.index = (current_row_index + image.stride) * size_of::<Pixel>();
                     Ok(rest_of_row.len())
@@ -399,7 +445,7 @@ where
         }
     }
 
-    fn flush(&mut self) -> std::io::Result<()> {
+    fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
 }
@@ -423,11 +469,11 @@ where
     }
 }
 
-impl<Pixel, Source, I: AsRef<Image<Source, Pixel>>> Read for ImageCursor<Source, Pixel, I>
+impl<Source, Pixel, I: AsRef<Image<Source, Pixel>>> Read for ImageCursor<Source, Pixel, I>
 where
     Source: AsRef<[Pixel]>,
 {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let image = self.image.as_ref();
         if self.index < image.stride * image.height * size_of::<Pixel>() {
             let current_row_index =
@@ -444,12 +490,12 @@ where
                 )
             };
             match buf.len().cmp(&rest_of_row.len()) {
-                std::cmp::Ordering::Less => {
+                cmp::Ordering::Less => {
                     self.index += buf.len();
                     buf.copy_from_slice(&rest_of_row[..buf.len()]);
                     Ok(buf.len())
                 }
-                std::cmp::Ordering::Equal | std::cmp::Ordering::Greater => {
+                cmp::Ordering::Equal | cmp::Ordering::Greater => {
                     buf[..rest_of_row.len()].copy_from_slice(rest_of_row);
                     self.index = (current_row_index + image.stride) * size_of::<Pixel>();
                     Ok(rest_of_row.len())

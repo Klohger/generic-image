@@ -1,13 +1,17 @@
 use generic_image::Image;
-use std::{fs::File, io::{BufReader, BufWriter}, mem::size_of};
+use std::{
+    fs::File,
+    io::{BufReader, BufWriter},
+    mem::size_of,
+};
 
 fn main() {
     let mut image = unsafe { Image::uninit(16, 16) };
 
     image.fill([255u8, 0, 0]);
-    image[(1, 0)] = [0, 0, 0];
+    image[[1, 0]] = [0, 0, 0];
     image[(0, 1)][1] = 255;
-    let region = image.region((0, 0)..(2, 2)).unwrap();
+    let region = image.region([0, 0]..[2, 2]);
     {
         let mut encoder = png::Encoder::new(
             BufWriter::new(File::create("test.png").unwrap()),
@@ -30,11 +34,20 @@ fn main() {
         encoder.finish().unwrap();
     }
     {
-        let mut imported = unsafe { Image::<Box<_>, [u8;3]>::uninit(2, 2) };
+        let mut imported = unsafe { Image::<Box<_>, [u8; 3]>::uninit(2, 2) };
         let imported_source = imported.source_mut();
 
-        let mut decoder = png::Decoder::new(BufReader::new(File::open("test.png").unwrap())).read_info().unwrap();
-        decoder.next_frame(unsafe { std::slice::from_raw_parts_mut(imported_source.as_mut_ptr().cast(), imported_source.len() * size_of::<[u8;3]>()) }).unwrap();
+        let mut decoder = png::Decoder::new(BufReader::new(File::open("test.png").unwrap()))
+            .read_info()
+            .unwrap();
+        decoder
+            .next_frame(unsafe {
+                std::slice::from_raw_parts_mut(
+                    imported_source.as_mut_ptr().cast(),
+                    imported_source.len() * size_of::<[u8; 3]>(),
+                )
+            })
+            .unwrap();
 
         assert_eq!(region, imported);
     }
