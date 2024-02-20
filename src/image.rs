@@ -1,5 +1,6 @@
 use crate::{
     error::{IndexOutOfRange, IndexOutOfRangeReason, PositionOutOfRange, SourceTooSmall},
+    iterator::{Iter, IterRows},
     ImageCursor, ImageIndex,
 };
 use core::{
@@ -41,7 +42,7 @@ where
     RSource: AsRef<[Pixel]>,
 {
     fn eq(&self, other: &Image<RSource, Pixel>) -> bool {
-        self.iter().eq(other.iter())
+        self.iter_rows().eq(other.iter_rows())
     }
 }
 
@@ -149,7 +150,7 @@ impl<Pixel> Image<Vec<Pixel>, Pixel> {
     }
 }
 
-impl<Source, Pixel, I: ImageIndex<Source, Pixel>> Index<I> for Image<Source, Pixel>
+impl<Source, Pixel, I: ImageIndex> Index<I> for Image<Source, Pixel>
 where
     Source: AsRef<[Pixel]>,
 {
@@ -160,7 +161,7 @@ where
     }
 }
 
-impl<Source, Pixel, I: ImageIndex<Source, Pixel>> IndexMut<I> for Image<Source, Pixel>
+impl<Source, Pixel, I: ImageIndex> IndexMut<I> for Image<Source, Pixel>
 where
     Source: AsMut<[Pixel]> + AsRef<[Pixel]>,
 {
@@ -205,8 +206,8 @@ where
         Err(PositionOutOfRange {
             pos: [x, y],
             which_axes: {
-                let x_out_of_range = !(x < self.width);
-                let y_out_of_range = !(y < self.height);
+                let x_out_of_range = x >= self.width;
+                let y_out_of_range = y >= self.height;
                 if x_out_of_range && y_out_of_range {
                     crate::error::WhichAxes::Both
                 } else if x_out_of_range {
@@ -214,24 +215,48 @@ where
                 } else if y_out_of_range {
                     crate::error::WhichAxes::Y
                 } else {
-                    return Ok((x) + (y * self.stride));
+                    return Ok(x + y * self.stride);
                 }
             },
         })
+    }
+    pub const fn max_index(&self) -> usize {
+        ((self.height - 1) * self.stride) + (self.width - 1)
     }
     pub const fn index_to_pos(&self, i: usize) -> Result<[usize; 2], IndexOutOfRange> {
         Err(IndexOutOfRange {
             value: i,
             reason: {
-                if i % self.height > self.stride {
+                if i % self.stride >= self.width {
                     IndexOutOfRangeReason::OutsideStride
-                } else if i > (self.stride * self.height) {
+                } else if i >= self.max_index() {
                     IndexOutOfRangeReason::PastEnd
                 } else {
                     return Ok([i % self.width, i / self.width]);
                 }
             },
         })
+    }
+    pub const fn next_index(&self, idx: usize) -> Option<usize> {
+        if idx == self.max_index() {
+            None
+        } else {
+            Some(self.normalize_index(idx + 1))
+        }
+    }
+    pub const fn normalize_index(&self, mut idx: usize) -> usize {
+        if idx >= self.max_index() {
+            idx = self.max_index();
+        }
+        let inc = {
+            let inc = (idx) % self.stride;
+            if inc >= self.width {
+                0
+            } else {
+                inc
+            }
+        };
+        inc + ((idx + 1 + self.width) / self.stride)
     }
 
     pub fn from_source(
@@ -271,7 +296,7 @@ where
     }
     pub fn region(
         &self,
-        range: Range<impl ImageIndex<Source, Pixel>>,
+        range: Range<impl ImageIndex>,
     ) -> Result<Image<&[Pixel], Pixel>, crate::Error<Source, Pixel>> {
         let start_pos = range.start.pos(self)?;
         let end_pos = range.end.pos(self)?;
@@ -279,7 +304,7 @@ where
         let end_i = range.end.index(self)?;
         Ok(Image {
             width: end_pos[0] - start_pos[0],
-            height: end_pos[0] - start_pos[1],
+            height: end_pos[1] - start_pos[1],
             stride: self.stride,
             source: &self.source.as_ref().index(start_i..end_i),
             _p: PhantomData,
@@ -306,10 +331,11 @@ where
     pub fn into_source(self) -> Source {
         self.source
     }
-
-    pub fn iter<'a>(&'a self) -> std::iter::Map<Range<usize>, impl Fn(usize) -> &'a [Pixel]> {
-        let map = |i| &self.source.as_ref()[(i * self.stride)..((i * self.stride) + self.width)];
-        (0..self.height).map(map)
+    pub fn iter(&self) -> Iter<Source, Pixel> {
+        Iter::new(self)
+    }
+    pub fn iter_rows(&self) -> IterRows<Source, Pixel> {
+        IterRows::new(self)
     }
 }
 
@@ -322,7 +348,7 @@ where
     }
     pub fn region_mut(
         &mut self,
-        range: Range<impl ImageIndex<Source, Pixel>>,
+        range: Range<impl ImageIndex>,
     ) -> Result<Image<&mut [Pixel], Pixel>, crate::Error<Source, Pixel>> {
         let start_pos = range.start.pos(self)?;
         let end_pos = range.end.pos(self)?;
@@ -330,7 +356,7 @@ where
         let end_i = range.end.index(self)?;
         Ok(Image {
             width: end_pos[0] - start_pos[0],
-            height: end_pos[0] - start_pos[1],
+            height: end_pos[1] - start_pos[1],
             stride: self.stride,
             source: self.source.as_mut().index_mut(start_i..end_i),
             _p: PhantomData,

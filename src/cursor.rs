@@ -1,10 +1,5 @@
 use crate::Image;
-use core::{
-    cmp,
-    marker::PhantomData,
-    mem::size_of,
-    ops::{Index, IndexMut},
-};
+use core::{cmp, marker::PhantomData, mem::size_of};
 use std::io::{self, Read, Seek, Write};
 
 pub struct ImageCursor<Source, Pixel, I: AsRef<Image<Source, Pixel>>>
@@ -14,6 +9,20 @@ where
     image: I,
     index: usize,
     _p: PhantomData<(Source, Pixel)>,
+}
+
+impl<Source, Pixel, I: AsRef<Image<Source, Pixel>>> ImageCursor<Source, Pixel, I>
+where
+    Source: AsRef<[Pixel]>,
+{
+    pub fn read_into_box(&mut self) -> io::Result<Box<[u8]>> {
+        let image = self.image.as_ref();
+        let mut buf = unsafe {
+            Box::new_uninit_slice(image.width() * image.height() * size_of::<Pixel>()).assume_init()
+        };
+        self.read_exact(&mut buf)?;
+        Ok(buf)
+    }
 }
 
 impl<Source, Pixel, I: AsRef<Image<Source, Pixel>>> Seek for ImageCursor<Source, Pixel, I>
@@ -49,14 +58,17 @@ where
         if self.index < image.stride() * image.height() * size_of::<Pixel>() {
             let current_row_index =
                 (self.index / (image.stride() * size_of::<Pixel>())) * image.stride();
-            let last_element_of_row = current_row_index + image.width();
-            let rest_of_row = image
-                .source_mut()
-                .as_mut()
-                .index_mut(self.index..last_element_of_row * size_of::<Pixel>());
+            let last_element_of_row = (current_row_index + image.width()) * size_of::<Pixel>();
             let rest_of_row = unsafe {
-                let len = rest_of_row.len() * size_of::<Pixel>();
-                std::slice::from_raw_parts_mut(rest_of_row.as_mut_ptr().cast::<u8>(), len)
+                std::slice::from_raw_parts_mut(
+                    image
+                        .source_mut()
+                        .as_mut()
+                        .as_mut_ptr()
+                        .cast::<u8>()
+                        .add(self.index),
+                    last_element_of_row - self.index,
+                )
             };
 
             match buf.len().cmp(&rest_of_row.len()) {
@@ -67,7 +79,7 @@ where
                 }
                 cmp::Ordering::Equal | cmp::Ordering::Greater => {
                     rest_of_row.copy_from_slice(&buf[..rest_of_row.len()]);
-                    self.index = (current_row_index + image.stride()) * size_of::<Pixel>();
+                    self.index += image.stride() * size_of::<Pixel>();
                     Ok(rest_of_row.len())
                 }
             }
@@ -75,7 +87,6 @@ where
             Ok(0)
         }
     }
-
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
@@ -109,15 +120,16 @@ where
         if self.index < image.stride() * image.height() * size_of::<Pixel>() {
             let current_row_index =
                 (self.index / (image.stride() * size_of::<Pixel>())) * image.stride();
-            let last_element_of_row = current_row_index + image.width();
-            let rest_of_row = image
-                .source()
-                .as_ref()
-                .index(self.index..last_element_of_row * size_of::<Pixel>());
+            let last_element_of_row = (current_row_index + image.width()) * size_of::<Pixel>();
             let rest_of_row = unsafe {
                 std::slice::from_raw_parts(
-                    rest_of_row.as_ptr().cast::<u8>(),
-                    rest_of_row.len() * size_of::<Pixel>(),
+                    image
+                        .source()
+                        .as_ref()
+                        .as_ptr()
+                        .cast::<u8>()
+                        .add(self.index),
+                    last_element_of_row - self.index,
                 )
             };
             match buf.len().cmp(&rest_of_row.len()) {
@@ -128,7 +140,7 @@ where
                 }
                 cmp::Ordering::Equal | cmp::Ordering::Greater => {
                     buf[..rest_of_row.len()].copy_from_slice(rest_of_row);
-                    self.index = (current_row_index + image.stride()) * size_of::<Pixel>();
+                    self.index += image.stride() * size_of::<Pixel>();
                     Ok(rest_of_row.len())
                 }
             }
