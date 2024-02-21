@@ -14,7 +14,7 @@ impl<'a, Source, Pixel> Iter<'a, Source, Pixel>
 where
     Source: AsRef<[Pixel]>,
 {
-    pub fn new(image: &'a Image<Source, Pixel>) -> Self {
+    pub const fn new(image: &'a Image<Source, Pixel>) -> Self {
         Self { image, idx: 0 }
     }
 }
@@ -52,7 +52,7 @@ impl<'a, Source, Pixel> IterRows<'a, Source, Pixel>
 where
     Source: AsRef<[Pixel]>,
 {
-    pub fn new(image: &'a Image<Source, Pixel>) -> Self {
+    pub const fn new(image: &'a Image<Source, Pixel>) -> Self {
         Self { image, row: 0 }
     }
 }
@@ -67,11 +67,13 @@ where
         if self.row == self.image.height() {
             None
         } else {
-            let ret = self.image.source().as_ref().index({
-                let start = self.row * self.image.stride();
-                let end = start + self.image.width();
-                start..end
-            });
+            let ret = unsafe {
+                self.image.source().as_ref().index({
+                    let start = self.row * self.image.stride();
+                    let end = start + self.image.width();
+                    start..end
+                })
+            };
             self.row += 1;
             Some(ret)
         }

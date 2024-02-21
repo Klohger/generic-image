@@ -2,8 +2,8 @@ use crate::{
     error::{IndexOutOfRange, PositionOutOfRange},
     Image,
 };
-
-pub trait ImageIndex {
+#[const_trait]
+pub trait ImageIndex: Copy {
     fn index<Pixel>(
         self,
         image: &Image<impl AsRef<[Pixel]>, Pixel>,
@@ -14,7 +14,7 @@ pub trait ImageIndex {
     ) -> Result<[usize; 2], IndexOutOfRange>;
 }
 
-impl ImageIndex for usize {
+impl const ImageIndex for usize {
     fn index<Pixel>(
         self,
         _: &Image<impl AsRef<[Pixel]>, Pixel>,
@@ -30,7 +30,7 @@ impl ImageIndex for usize {
     }
 }
 
-impl ImageIndex for (usize, usize) {
+impl const ImageIndex for (usize, usize) {
     fn index<Pixel>(
         self,
         image: &Image<impl AsRef<[Pixel]>, Pixel>,
@@ -46,7 +46,7 @@ impl ImageIndex for (usize, usize) {
     }
 }
 
-impl ImageIndex for [usize; 2] {
+impl const ImageIndex for [usize; 2] {
     fn index<Pixel>(
         self,
         image: &Image<impl AsRef<[Pixel]>, Pixel>,

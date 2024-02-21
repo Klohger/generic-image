@@ -102,7 +102,7 @@ where
     pub const fn index(&self) -> usize {
         self.index
     }
-    pub const fn new(image: I) -> Self {
+    pub const unsafe fn new(image: I) -> Self {
         Self {
             image,
             index: 0,

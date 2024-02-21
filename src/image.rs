@@ -1,6 +1,6 @@
 use crate::{
     error::{IndexOutOfRange, IndexOutOfRangeReason, PositionOutOfRange, SourceTooSmall},
-    iterator::{Iter, IterRows},
+    iterator::{Iter, IterMut, IterRows, IterRowsMut},
     ImageCursor, ImageIndex,
 };
 use core::{
@@ -84,46 +84,14 @@ impl<Pixel> Image<Box<[Pixel]>, Pixel> {
         }
     }
 }
-
-impl<Pixel> Image<Rc<[Pixel]>, Pixel> {
-    pub unsafe fn zeroed_rc(width: usize, height: usize) -> Self {
-        Image {
-            width,
-            height,
-            stride: width,
-            source: unsafe { Rc::new_zeroed_slice(width * height).assume_init() },
-            _p: PhantomData,
-        }
-    }
-    pub unsafe fn uninit_rc(width: usize, height: usize) -> Self {
-        Image {
-            width,
-            height,
-            stride: width,
-            source: Rc::new_uninit_slice(width * height).assume_init(),
-            _p: PhantomData,
-        }
-    }
-}
-
-impl<Pixel> Image<Arc<[Pixel]>, Pixel> {
-    pub unsafe fn zeroed_arc(width: usize, height: usize) -> Self {
-        Image {
-            width,
-            height,
-            stride: width,
-            source: unsafe { Arc::new_zeroed_slice(width * height).assume_init() },
-            _p: PhantomData,
-        }
-    }
-    pub unsafe fn uninit_arc(width: usize, height: usize) -> Self {
-        Image {
-            width,
-            height,
-            stride: width,
-            source: Arc::new_uninit_slice(width * height).assume_init(),
-            _p: PhantomData,
-        }
+impl<Pixel> Image<Box<[Pixel]>, Pixel>
+where
+    Pixel: Clone,
+{
+    pub fn filled(width: usize, height: usize, pixel: Pixel) -> Self {
+        let mut image = unsafe { Image::uninit(width, height) };
+        unsafe { image.fill_source(pixel) }
+        image
     }
 }
 
@@ -149,7 +117,16 @@ impl<Pixel> Image<Vec<Pixel>, Pixel> {
         }
     }
 }
-
+impl<Pixel> Image<Vec<Pixel>, Pixel>
+where
+    Pixel: Clone,
+{
+    pub fn filled_vec(width: usize, height: usize, pixel: Pixel) -> Self {
+        let mut image = unsafe { Image::uninit_vec(width, height) };
+        unsafe { image.fill_source(pixel) };
+        image
+    }
+}
 impl<Source, Pixel, I: ImageIndex> Index<I> for Image<Source, Pixel>
 where
     Source: AsRef<[Pixel]>,
@@ -259,7 +236,7 @@ where
         inc + ((idx + 1 + self.width) / self.stride)
     }
 
-    pub fn from_source(
+    pub const fn from_source(
         width: usize,
         height: usize,
         source: Source,
@@ -276,7 +253,7 @@ where
             })
         }
     }
-    pub fn from_source_with_stride(
+    pub const fn from_source_with_stride(
         width: usize,
         height: usize,
         stride: usize,
@@ -294,14 +271,28 @@ where
             })
         }
     }
-    pub fn region(
+    pub const fn region<I: ~const ImageIndex>(
         &self,
-        range: Range<impl ImageIndex>,
+        range: Range<I>,
     ) -> Result<Image<&[Pixel], Pixel>, crate::Error<Source, Pixel>> {
-        let start_pos = range.start.pos(self)?;
-        let end_pos = range.end.pos(self)?;
-        let start_i = range.start.index(self)?;
-        let end_i = range.end.index(self)?;
+        let Range { start, end } = range;
+
+        let start_pos = match start.pos(self) {
+            Ok(pos) => pos,
+            Err(err) => return Err(crate::Error::IndexOutOfRange(err)),
+        };
+        let end_pos = match end.pos(self) {
+            Ok(pos) => pos,
+            Err(err) => return Err(crate::Error::IndexOutOfRange(err)),
+        };
+        let start_i = match start.index(self) {
+            Ok(index) => index,
+            Err(err) => return Err(crate::Error::PositionOutOfRange(err)),
+        };
+        let end_i = match end.index(self) {
+            Ok(index) => index,
+            Err(err) => return Err(crate::Error::PositionOutOfRange(err)),
+        };
         Ok(Image {
             width: end_pos[0] - start_pos[0],
             height: end_pos[1] - start_pos[1],
@@ -310,11 +301,11 @@ where
             _p: PhantomData,
         })
     }
-    pub const fn cursor(&self) -> ImageCursor<Source, Pixel, &Self> {
+    pub const unsafe fn cursor(&self) -> ImageCursor<Source, Pixel, &Self> {
         ImageCursor::new(self)
     }
     pub const fn into_cursor(self) -> ImageCursor<Source, Pixel, Self> {
-        ImageCursor::new(self)
+        unsafe { ImageCursor::new(self) }
     }
     pub const fn width(&self) -> usize {
         self.width
@@ -325,13 +316,13 @@ where
     pub const fn stride(&self) -> usize {
         self.stride
     }
-    pub const fn source(&self) -> &Source {
+    pub const unsafe fn source(&self) -> &Source {
         &self.source
     }
-    pub fn into_source(self) -> Source {
+    pub unsafe fn into_source(self) -> Source {
         self.source
     }
-    pub fn iter(&self) -> Iter<Source, Pixel> {
+    pub const fn iter(&self) -> Iter<Source, Pixel> {
         Iter::new(self)
     }
     pub fn iter_rows(&self) -> IterRows<Source, Pixel> {
@@ -343,7 +334,7 @@ impl<Source, Pixel> Image<Source, Pixel>
 where
     Source: AsMut<[Pixel]> + AsRef<[Pixel]>,
 {
-    pub fn source_mut(&mut self) -> &mut Source {
+    pub unsafe fn source_mut(&mut self) -> &mut Source {
         &mut self.source
     }
     pub fn region_mut(
@@ -362,8 +353,14 @@ where
             _p: PhantomData,
         })
     }
-    pub fn cursor_mut(&mut self) -> ImageCursor<Source, Pixel, &mut Self> {
+    pub unsafe fn cursor_mut(&mut self) -> ImageCursor<Source, Pixel, &mut Self> {
         ImageCursor::new(self)
+    }
+    pub fn iter_mut(&mut self) -> IterMut<Source, Pixel> {
+        IterMut::new(self)
+    }
+    pub fn iter_rows_mut(&mut self) -> IterRowsMut<Source, Pixel> {
+        IterRowsMut::new(self)
     }
 }
 
@@ -372,7 +369,16 @@ where
     Pixel: Clone,
     Source: AsMut<[Pixel]> + AsRef<[Pixel]>,
 {
+    pub unsafe fn fill_source(&mut self, pixel: Pixel) {
+        self.source_mut().as_mut().fill(pixel)
+    }
     pub fn fill(&mut self, pixel: Pixel) {
-        self.source.as_mut().fill(pixel);
+        if self.width == self.stride {
+            unsafe { self.fill_source(pixel) }
+        } else {
+            for row in self.iter_rows_mut() {
+                row.fill(pixel.clone())
+            }
+        }
     }
 }

@@ -35,7 +35,7 @@ impl<Source, Pixel> SourceTooSmall<Source, Pixel>
 where
     Source: AsRef<[Pixel]>,
 {
-    pub fn new(source: Source, width: usize, height: usize, stride: usize) -> Self {
+    pub const fn new(source: Source, width: usize, height: usize, stride: usize) -> Self {
         Self {
             source,
             width,

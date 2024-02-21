@@ -25,7 +25,7 @@ where
     encoder.set_filter(png::FilterType::Paeth);
     encoder.set_depth(png::BitDepth::Eight);
     let mut encoder = encoder.write_header().unwrap();
-    let buf = image.cursor().read_into_box().unwrap();
+    let buf = unsafe { image.cursor().read_into_box().unwrap() };
     println!("original: {buf:02X?}");
     encoder.write_image_data(&buf).unwrap();
     drop(buf);
