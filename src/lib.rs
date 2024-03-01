@@ -18,9 +18,9 @@
 /// const_trait feature gate (no need for const_refs_to_cell)
 /// POST 1.0:
 /// png feature gate
-/// basic drawing maybe
-/// improve cursor maybe.
-/// chunks iterator maybe
+/// basic drawing
+/// improve cursor.
+/// chunks iterator
 /// std feature gate
 pub mod cursor;
 pub mod error;
