@@ -7,7 +7,7 @@ where
     Source: AsRef<[Pixel]>,
 {
     image: &'a Image<Source, Pixel>,
-    idx: usize,
+    idx: Option<usize>,
 }
 
 impl<'a, Source, Pixel> Iter<'a, Source, Pixel>
@@ -15,7 +15,10 @@ where
     Source: AsRef<[Pixel]>,
 {
     pub const fn new(image: &'a Image<Source, Pixel>) -> Self {
-        Self { image, idx: 0 }
+        Self {
+            image,
+            idx: Some(0),
+        }
     }
 }
 
@@ -26,13 +29,9 @@ where
     type Item = ([usize; 2], &'a Pixel);
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(next_idx) = self.image.next_index(self.idx) {
-            let ret = (
-                self.image.index_to_pos(self.idx).unwrap(),
-                &self.image[self.idx],
-            );
-
-            self.idx = next_idx;
+        if let Some(idx) = self.idx {
+            let ret = (self.image.index_to_pos(idx).unwrap(), &self.image[idx]);
+            self.idx = self.image.next_index(idx);
             Some(ret)
         } else {
             None
@@ -85,7 +84,7 @@ where
     Source: AsRef<[Pixel]> + AsMut<[Pixel]>,
 {
     image: &'a mut Image<Source, Pixel>,
-    idx: usize,
+    idx: Option<usize>,
 }
 
 impl<'a, Source, Pixel> IterMut<'a, Source, Pixel>
@@ -93,7 +92,10 @@ where
     Source: AsRef<[Pixel]> + AsMut<[Pixel]>,
 {
     pub fn new(image: &'a mut Image<Source, Pixel>) -> Self {
-        Self { image, idx: 0 }
+        Self {
+            image,
+            idx: Some(0),
+        }
     }
 }
 
@@ -104,12 +106,11 @@ where
     type Item = ([usize; 2], &'a mut Pixel);
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(next_idx) = self.image.next_index(self.idx) {
-            let ret = (self.image.index_to_pos(self.idx).unwrap(), unsafe {
-                &mut *((&mut self.image[self.idx]) as *mut _)
+        if let Some(idx) = self.idx {
+            let ret = (self.image.index_to_pos(idx).unwrap(), unsafe {
+                &mut *((&mut self.image[idx]) as *mut _)
             });
-
-            self.idx = next_idx;
+            self.idx = self.image.next_index(idx);
             Some(ret)
         } else {
             None
