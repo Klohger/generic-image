@@ -2,11 +2,20 @@
 #![feature(const_trait_impl)]
 #![feature(const_refs_to_cell)]
 #![feature(effects)]
-/// IMPROVEMENTS: (in subjective order of importance)
+#![feature(generic_const_exprs)]
+#![feature(maybe_uninit_uninit_array_transpose)]
+
+/// TODO: (in subjective order of importance)
 /// documentation
+/// mapping
+/// map sekf
 /// ability to resize
 /// insert images onto other images
+/// ability to remove stride
+/// generic_const_exprs feature gate
 /// new_uninit feature gate
+/// const_trait feature gate (no need for const_refs_to_cell)
+/// POST 1.0:
 /// png feature gate
 /// basic drawing maybe
 /// improve cursor maybe.

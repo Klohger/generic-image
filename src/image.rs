@@ -8,8 +8,7 @@ use core::{
     marker::PhantomData,
     ops::{Index, IndexMut, Range},
 };
-use std::{rc::Rc, sync::Arc};
-
+use std::mem::{self, MaybeUninit};
 pub struct Image<Source, Pixel>
 where
     Source: AsRef<[Pixel]>,
@@ -35,7 +34,7 @@ where
     }
 }
 
-impl<LSource, RSource, Pixel> PartialEq<Image<RSource, Pixel>> for Image<LSource, Pixel>
+impl<LSource, RSource, Pixel> const PartialEq<Image<RSource, Pixel>> for Image<LSource, Pixel>
 where
     Pixel: PartialEq,
     LSource: AsRef<[Pixel]>,
@@ -64,6 +63,27 @@ where
     }
 }
 
+impl<Source, Pixel, I: ImageIndex> Index<I> for Image<Source, Pixel>
+where
+    Source: AsRef<[Pixel]>,
+{
+    type Output = Pixel;
+
+    fn index(&self, index: I) -> &Pixel {
+        self.source.as_ref().index(index.index(self).unwrap())
+    }
+}
+
+impl<Source, Pixel, I: ImageIndex> IndexMut<I> for Image<Source, Pixel>
+where
+    Source: AsMut<[Pixel]> + AsRef<[Pixel]>,
+{
+    fn index_mut(&mut self, index: I) -> &mut Pixel {
+        let index = index.index(self).unwrap();
+
+        self.source.as_mut().index_mut(index)
+    }
+}
 impl<Pixel> Image<Box<[Pixel]>, Pixel> {
     pub unsafe fn zeroed(width: usize, height: usize) -> Self {
         Image {
@@ -84,14 +104,15 @@ impl<Pixel> Image<Box<[Pixel]>, Pixel> {
         }
     }
 }
+
 impl<Pixel> Image<Box<[Pixel]>, Pixel>
 where
-    Pixel: Clone,
+    Pixel: Copy,
 {
     pub fn filled(width: usize, height: usize, pixel: Pixel) -> Self {
-        let mut image = unsafe { Image::uninit(width, height) };
-        unsafe { image.fill_source(pixel) }
-        image
+        let mut source = Box::new_uninit_slice(width * height);
+        source.fill(MaybeUninit::new(pixel));
+        unsafe { Image::from_source_unchecked(width, height, source.assume_init()) }
     }
 }
 
@@ -116,37 +137,83 @@ impl<Pixel> Image<Vec<Pixel>, Pixel> {
             _p: PhantomData,
         }
     }
+    /*
+    pub fn map_self<T>(self, f: impl Fn(*const Pixel, *mut usize)) -> Image<Vec<T>, T> {
+        if mem::size_of::<Pixel>() < mem::size_of::<T>() {
+            todo!()
+        } else {
+            todo!()
+        }
+    }
+    */
 }
-impl<Pixel> Image<Vec<Pixel>, Pixel>
-where
-    Pixel: Clone,
-{
-    pub fn filled_vec(width: usize, height: usize, pixel: Pixel) -> Self {
-        let mut image = unsafe { Image::uninit_vec(width, height) };
-        unsafe { image.fill_source(pixel) };
+#[const_trait]
+pub trait GenericConstExprPainUninit<const W: usize, const H: usize, Pixel> {
+    const WIDTH: usize = W;
+    const HEIGHT: usize = H;
+    unsafe fn uninit_array() -> Image<[Pixel; W * H], Pixel> {
+        let arr = MaybeUninit::uninit();
+        let image = Image::from_source_unchecked(W, H, arr.assume_init());
+        image
+    }
+    unsafe fn zeroed_array() -> Image<[Pixel; W * H], Pixel> {
+        let arr = MaybeUninit::uninit();
+        let image = Image::from_source_unchecked(W, H, arr.assume_init());
         image
     }
 }
-impl<Source, Pixel, I: ImageIndex> Index<I> for Image<Source, Pixel>
-where
-    Source: AsRef<[Pixel]>,
-{
-    type Output = Pixel;
-
-    fn index(&self, index: I) -> &Pixel {
-        self.source.as_ref().index(index.index(self).unwrap())
+pub trait GenericConstExprPainFill<const W: usize, const H: usize, Pixel: Copy> {
+    unsafe fn filled_array(pixel: Pixel) -> Image<[Pixel; W * H], Pixel> {
+        let mut arr = MaybeUninit::uninit().transpose();
+        arr.fill(MaybeUninit::new(pixel));
+        let image = Image::from_source_unchecked(W, H, arr.transpose().assume_init());
+        image
     }
 }
 
-impl<Source, Pixel, I: ImageIndex> IndexMut<I> for Image<Source, Pixel>
-where
-    Source: AsMut<[Pixel]> + AsRef<[Pixel]>,
+impl<const W: usize, const H: usize, Pixel> const GenericConstExprPainUninit<W, H, Pixel>
+    for Image<[Pixel; W * H], Pixel>
 {
-    fn index_mut(&mut self, index: I) -> &mut Pixel {
-        let index = index.index(self).unwrap();
-
-        self.source.as_mut().index_mut(index)
+}
+/*
+impl<Pixel, const W: usize, const H: usize> Image<[Pixel; W * H], Pixel>
+where
+    [Pixel; { W * H }]:,
+{
+    pub const WIDTH: usize = W;
+    pub unsafe fn zeroed() -> Self {}
+    pub unsafe fn uninit(width: usize, height: usize) -> Self {
+        todo!()
     }
+}
+*/
+
+impl<Pixel> Image<Vec<Pixel>, Pixel>
+where
+    Pixel: Copy,
+{
+    pub fn filled_vec(width: usize, height: usize, pixel: Pixel) -> Self {
+        let mut source = Box::new_uninit_slice(width * height);
+        source.fill(MaybeUninit::new(pixel));
+        unsafe { Image::from_source_unchecked(width, height, source.assume_init().to_vec()) }
+    }
+    /*
+    pub fn remove_stride(&mut self) {
+        if self.width != self.stride {
+            for i in 1..self.height {
+                let src = i * self.stride;
+                let dst = ((i - 1) * self.stride) + self.width;
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        &self.source[src],
+                        &mut self.source[dst],
+                        self.width,
+                    )
+                }
+            }
+        }
+    }
+    */
 }
 
 impl<Source, Pixel> Image<Source, Pixel>
@@ -173,12 +240,40 @@ where
             _p: PhantomData,
         }
     }
+    pub fn reallocated_vec(&self) -> Image<Vec<Pixel>, Pixel> {
+        let mut source: Vec<MaybeUninit<Pixel>> = Vec::new();
+        unsafe { source.set_len(self.width * self.height) };
+        for (i, old_i) in (0..self.width).map(|i| (i * self.height, i * self.stride)) {
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    &self.source.as_ref()[old_i] as *const _,
+                    source[i].as_mut_ptr(),
+                    self.width,
+                )
+            };
+        }
+        Image {
+            width: self.width,
+            height: self.height,
+            stride: self.width,
+            source: unsafe { mem::transmute(source) },
+            _p: PhantomData,
+        }
+    }
 }
 
 impl<Source, Pixel> Image<Source, Pixel>
 where
     Source: AsRef<[Pixel]>,
 {
+    pub fn map<T>(&self, f: impl Fn(&Pixel) -> T) -> Image<Box<[T]>, T> {
+        let mut buf = Box::new_uninit_slice(self.width * self.height);
+        for (i, (_, p)) in self.iter().enumerate() {
+            buf[i].write(f(p));
+        }
+        unsafe { Image::from_source_unchecked(self.width, self.height, buf.assume_init()) }
+    }
+
     pub const fn pos_to_index(&self, x: usize, y: usize) -> Result<usize, PositionOutOfRange> {
         Err(PositionOutOfRange {
             pos: [x, y],
@@ -225,33 +320,37 @@ where
         if idx >= self.max_index() {
             idx = self.max_index();
         }
-        let inc = {
-            let inc = (idx) % self.stride;
-            if inc >= self.width {
-                0
-            } else {
-                inc
-            }
-        };
-        inc + ((idx + 1 + self.width) / self.stride)
-    }
 
+        let inc = (idx) % self.stride;
+        if inc >= self.width {
+            (idx - inc) + self.stride
+        } else {
+            idx
+        }
+    }
+    pub const unsafe fn from_source_unchecked(width: usize, height: usize, source: Source) -> Self {
+        Self::from_source_with_stride_unchecked(width, height, width, source)
+    }
+    pub const unsafe fn from_source_with_stride_unchecked(
+        width: usize,
+        height: usize,
+        stride: usize,
+        source: Source,
+    ) -> Self {
+        Self {
+            width,
+            height,
+            stride,
+            source,
+            _p: PhantomData,
+        }
+    }
     pub const fn from_source(
         width: usize,
         height: usize,
         source: Source,
     ) -> Result<Self, crate::error::SourceTooSmall<Source, Pixel>> {
-        if source.as_ref().len() < width * height {
-            Err(SourceTooSmall::new(source, width, height, width))
-        } else {
-            Ok(Self {
-                width,
-                height,
-                stride: width,
-                source,
-                _p: PhantomData,
-            })
-        }
+        Image::from_source_with_stride(width, height, width, source)
     }
     pub const fn from_source_with_stride(
         width: usize,
@@ -262,13 +361,7 @@ where
         if source.as_ref().len() < stride * height {
             Err(SourceTooSmall::new(source, width, height, stride))
         } else {
-            Ok(Self {
-                width,
-                height,
-                stride,
-                source,
-                _p: PhantomData,
-            })
+            Ok(unsafe { Self::from_source_with_stride_unchecked(width, height, stride, source) })
         }
     }
     pub const fn region<I: ~const ImageIndex>(
@@ -325,7 +418,7 @@ where
     pub const fn iter(&self) -> Iter<Source, Pixel> {
         Iter::new(self)
     }
-    pub fn iter_rows(&self) -> IterRows<Source, Pixel> {
+    pub const fn iter_rows(&self) -> IterRows<Source, Pixel> {
         IterRows::new(self)
     }
 }
