@@ -7,8 +7,9 @@
 
 /// TODO: (in subjective order of importance)
 /// documentation
+/// unit testing
 /// mapping
-/// map sekf
+/// map self
 /// ability to resize
 /// insert images onto other images
 /// ability to remove stride
